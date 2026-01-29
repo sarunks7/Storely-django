@@ -14,6 +14,9 @@ from django.utils.encoding import force_bytes
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import EmailMessage
 
+from carts.models import CartItem, Cart
+from carts.views import _cart_id
+import requests
 
 def register(request):
     # Registration logic here
@@ -71,9 +74,64 @@ def login(request):
 
         user = auth.authenticate(email=email, password=password)
         if user is not None:
+            try:
+                cart = Cart.objects.get(cart_id=_cart_id(request))
+                is_cart_item_exists = CartItem.objects.filter(cart=cart).exists()
+                # If cart items exist, assign them to the logged-in user
+                if is_cart_item_exists:
+                    # Get the cart items
+                    cart_item = CartItem.objects.filter(cart=cart)
+
+                    # Get variations from cart items
+                    product_variation = []
+                    for item in cart_item:
+                        variation = item.variations.all()
+                        product_variation.append(list(variation))
+
+                    # Get existing cart items for the user to access product variations
+                    cart_item = CartItem.objects.filter(user=user)
+                    ex_var_list = []
+                    id_list = []
+                    for item in cart_item:
+                        existing_variation = item.variations.all()
+                        ex_var_list.append(list(existing_variation))
+                        id_list.append(item.id)
+
+                    
+                    # product_variation = [1,2,3,4,5,6,7,8]
+                    # ex_var_list = [6,7,8,9]
+                    # Find matching variations
+                    # If match found, increase the quantity of that cart item,and group the rest as new cart items
+                    # Loop through the product variations in the cart
+                    for pr in product_variation:
+                        if pr in ex_var_list:
+                            index = ex_var_list.index(pr)
+                            item_id = id_list[index]
+                            item = CartItem.objects.get(id=item_id)
+                            item.quantity += 1
+                            item.user = user
+                            item.save()
+                        else:
+                            cart_item = CartItem.objects.filter(cart=cart)
+                            # assign the user to the cart items
+                            for item in cart_item:
+                                item.user = user
+                                item.save()
+
+            except:
+                pass
             auth.login(request, user)
             messages.success(request, 'You are now logged in.')
-            return redirect('dashboard')
+            url = request.META.get('HTTP_REFERER')
+            try:
+                query = requests.utils.urlparse(url).query
+                # next=/cart/checkout/
+                params = dict(x.split('=') for x in query.split('&'))
+                if 'next' in params:
+                    nextPage = params['next']
+                    return redirect(nextPage)
+            except:
+                 return redirect('dashboard')
         else:
             messages.error(request, 'Invalid login credentials')
             return redirect('login')
@@ -86,6 +144,7 @@ def logout(request):
     auth.logout(request)
     messages.success(request, 'You have been logged out successfully.')
     return redirect('login')
+
 
 def activate(request, uidb64, token):
     # Account activation logic here
@@ -151,6 +210,7 @@ def resetPassword_validate(request, uidb64, token):
     else:
         messages.error(request, 'This link has been expired!')
         return redirect('login')
+
 
 def resetPassword(request):
     if request.method == 'POST':
